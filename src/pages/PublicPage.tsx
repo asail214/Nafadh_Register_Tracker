@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, ExternalLink, ImagePlus, Lightbulb, Send, TriangleAlert, UserCheck, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowRight, Check, CheckCircle2, Copy, ExternalLink, ImagePlus, Lightbulb, RefreshCw, Send, TriangleAlert, UserCheck, X } from 'lucide-react';
 import { Header } from '../App';
 import { api, friendlyError } from '../lib/api';
 import { emptyForm, progress, stepErrors, STEPS, type FormState, type Kind } from '../lib/formSteps';
 import { compressImage } from '../lib/image';
 import { HAS_ACCOUNT, ISSUE_CATEGORY, MISSING_PARTS, NAFADH_URL, PROFILE_STATUS } from '../lib/labels';
 import type { HasAccount, ProfileStatus, Submission } from '../lib/types';
+import { actionFromUrl, clearRemembered, deviceStorage, loadRemembered, REMEMBER_DAYS, saveRemembered, type Remembered } from '../lib/remember';
 import { LIMITS } from '../lib/validation';
 import { trackVisit } from '../lib/visit';
 
 const CHOICES: { kind: Kind; label: string; hint: string; Icon: typeof UserCheck }[] = [
-  { kind: 'status', label: 'تحديث حالة حسابي', hint: 'التسجيل واكتمال الملف', Icon: UserCheck },
+  { kind: 'status', label: 'تحديث حالة حسابي', hint: 'التسجيل واكتمال الملف — يمكنك التحديث في أي وقت', Icon: UserCheck },
   { kind: 'issue', label: 'الإبلاغ عن مشكلة', hint: 'مع لقطات شاشة اختيارية', Icon: TriangleAlert },
   { kind: 'suggestion', label: 'تقديم اقتراح تحسين', hint: 'فكرة أو ملاحظة', Icon: Lightbulb },
 ];
@@ -19,10 +20,42 @@ const KIND_LABEL: Record<Kind, string> = { status: 'تحديث حالة الحس
 
 export default function PublicPage() {
   const [doneRef, setDoneRef] = useState<string | null>(null);
-  // name/email are kept between submissions so people can send another entry quickly
-  const [identity, setIdentity] = useState({ full_name: '', email: '' });
+  const [doneKind, setDoneKind] = useState<Kind>('status');
+  const [store] = useState(deviceStorage);
+  const [remembered, setRemembered] = useState(() => loadRemembered(store));
+  // name/email are kept between submissions (in memory) so people can send another entry quickly
+  const [identity, setIdentity] = useState<Identity>(() => ({ full_name: remembered?.full_name ?? '', email: remembered?.email ?? '' }));
+  const [start, setStart] = useState<Kind | ''>(() => actionFromUrl(location.search) ?? '');
   const [formKey, setFormKey] = useState(0);
+  const [copied, setCopied] = useState(false);
   useEffect(() => trackVisit(api), []);
+
+  const statusLink = location.origin + '/?action=status';
+  const restart = (kind: Kind | '') => {
+    setDoneRef(null);
+    setCopied(false);
+    setStart(kind);
+    setFormKey((k) => k + 1);
+  };
+
+  function finish(ref: string, f: FormState, remember: boolean) {
+    const id = { full_name: f.full_name.trim(), email: f.email.trim().toLowerCase() };
+    setIdentity(id);
+    if (remember && f.kind) {
+      const status =
+        f.kind === 'status'
+          ? { has_account: f.has_account, profile_status: f.profile_status, missing_parts: f.profile_status === 'partial' ? f.missing_parts : [] }
+          : (remembered?.status ?? null);
+      const status_at = f.kind === 'status' ? new Date().toISOString() : (remembered?.status_at ?? null);
+      // a different person on the same device must not inherit the previous person's answers
+      const same = remembered?.email === id.email;
+      saveRemembered({ ...id, status: same || f.kind === 'status' ? status : null, status_at: same || f.kind === 'status' ? status_at : null }, store);
+    } else clearRemembered(store);
+    setRemembered(loadRemembered(store));
+    setDoneKind(f.kind || 'status');
+    setDoneRef(ref);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 
   return (
     <>
@@ -51,27 +84,69 @@ export default function PublicPage() {
             {api.mode === 'demo' && (
               <p className="muted">ملاحظة: هذا وضع تجريبي، المشاركة محفوظة في هذا المتصفح فقط ولم تُرسل لأي خادم.</p>
             )}
-            <p className="muted">يمكنك العودة في أي وقت لإرسال بلاغ آخر أو تحديث حالتك لاحقًا.</p>
-            <button
-              className="btn"
-              onClick={() => {
-                setDoneRef(null);
-                setFormKey(formKey + 1);
-              }}
-            >
-              إرسال مشاركة أخرى
-            </button>
+            <div className="success-actions">
+              <button className="btn" onClick={() => restart('')}>
+                إرسال مشاركة أخرى
+              </button>
+            </div>
+            <div className="later">
+              <h3>
+                <RefreshCw size={18} aria-hidden /> تحديث حالتي لاحقًا
+              </h3>
+              <p className="muted">
+                {doneKind === 'status' ? 'حُفظ هذا التحديث، وتبقى تحديثاتك السابقة محفوظة كذلك. ' : ''}
+                عندما تتغير حالة حسابك أو ملفك في منصة نفاذ، عُد إلى هذا الرابط وأرسل تحديثًا جديدًا.
+              </p>
+              <div className="later-link">
+                <a href={statusLink} dir="ltr">
+                  {statusLink.replace(/^https?:\/\//, '')}
+                </a>
+                <button
+                  className="btn outline sm"
+                  onClick={() =>
+                    navigator.clipboard
+                      ?.writeText(statusLink)
+                      .then(() => setCopied(true))
+                      .catch(() => setCopied(false))
+                  }
+                >
+                  {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />} {copied ? 'تم النسخ' : 'نسخ الرابط'}
+                </button>
+              </div>
+            </div>
           </div>
         ) : (
-          <EntryForm
-            key={formKey}
-            identity={identity}
-            onDone={(ref, id) => {
-              setIdentity(id);
-              setDoneRef(ref);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-          />
+          <>
+            {remembered && (
+              <div className="welcome" role="region" aria-label="بياناتك المحفوظة على هذا الجهاز">
+                <div>
+                  <strong>مرحبًا مجددًا، {remembered.full_name}</strong>
+                  <div className="muted small">
+                    {remembered.status_at
+                      ? `آخر تحديث حالة أُرسل من هذا الجهاز: ${fmtDate(remembered.status_at)}`
+                      : 'بياناتك محفوظة على هذا الجهاز فقط.'}
+                  </div>
+                </div>
+                <div className="welcome-actions">
+                  <button className="btn sm" onClick={() => restart('status')}>
+                    <RefreshCw size={14} aria-hidden /> تحديث حالتي
+                  </button>
+                  <button
+                    className="btn link"
+                    onClick={() => {
+                      clearRemembered(store);
+                      setRemembered(null);
+                      setIdentity({ full_name: '', email: '' });
+                      restart(start);
+                    }}
+                  >
+                    مسح بياناتي من هذا الجهاز
+                  </button>
+                </div>
+              </div>
+            )}
+            <EntryForm key={formKey} initial={initialForm(identity, remembered, start)} prefilled={!!remembered?.status} canRemember={!!store} rememberDefault={!!remembered} onDone={finish} />
+          </>
         )}
         <footer className="footer">
           نموذج تجريبي للمتابعة — لا تُدخل كلمات مرور أو رموز تحقق أو مستندات شخصية. لإحصاء الزيارات نستخدم معرّفًا
@@ -84,9 +159,28 @@ export default function PublicPage() {
 
 type Identity = { full_name: string; email: string };
 
-function EntryForm({ identity, onDone }: { identity: Identity; onDone: (ref: string, id: Identity) => void }) {
-  const [f, setF] = useState<FormState>({ ...emptyForm(), ...identity });
-  const [step, setStep] = useState(0);
+const fmtDate = (iso: string) => new Date(iso).toLocaleDateString('ar-OM-u-nu-latn', { dateStyle: 'medium' });
+
+/** Starting answers: identity, the chosen/linked kind, and (if remembered on this device) the last status answers. */
+function initialForm(identity: Identity, remembered: Remembered | null, kind: Kind | ''): FormState {
+  return { ...emptyForm(), ...identity, ...(remembered?.status ?? {}), kind };
+}
+
+interface EntryProps {
+  initial: FormState;
+  /** status answers were pre-filled from this device */
+  prefilled: boolean;
+  /** localStorage is usable in this browser */
+  canRemember: boolean;
+  rememberDefault: boolean;
+  onDone: (ref: string, f: FormState, remember: boolean) => void;
+}
+
+function EntryForm({ initial, prefilled, canRemember, rememberDefault, onDone }: EntryProps) {
+  const [f, setF] = useState<FormState>(initial);
+  // a linked/remembered kind with valid identity skips straight to the details step
+  const [step, setStep] = useState(() => (initial.kind && !Object.keys(stepErrors(initial, 0)).length ? 1 : 0));
+  const [remember, setRemember] = useState(rememberDefault);
   const [showErrors, setShowErrors] = useState(false);
   const [website, setWebsite] = useState(''); // honeypot
   const [images, setImages] = useState<{ blob: Blob; url: string }[]>([]);
@@ -146,8 +240,7 @@ function EntryForm({ identity, onDone }: { identity: Identity; onDone: (ref: str
       setShowErrors(true);
       return;
     }
-    const id = { full_name: f.full_name, email: f.email };
-    if (website) return onDone('—', id); // bot filled the hidden field: silently drop
+    if (website) return onDone('—', f, false); // bot filled the hidden field: silently drop
     const common = { full_name: f.full_name, email: f.email };
     const imgs = images.map((i) => i.blob);
     const s: Submission =
@@ -165,7 +258,7 @@ function EntryForm({ identity, onDone }: { identity: Identity; onDone: (ref: str
           : { ...common, kind: 'suggestion', title: f.title, description: f.description, images: imgs };
     setBusy(true);
     try {
-      onDone(await api.submit(s), id);
+      onDone(await api.submit(s), f, canRemember && remember);
     } catch (e) {
       setSubmitError(friendlyError(e));
     } finally {
@@ -254,10 +347,19 @@ function EntryForm({ identity, onDone }: { identity: Identity; onDone: (ref: str
               </span>
               <div className="choices" role="radiogroup">
                 {CHOICES.map(({ kind, label, hint, Icon }) => (
-                  <button type="button" key={kind} className="choice" role="radio" aria-checked={f.kind === kind} onClick={() => update({ kind })}>
-                    <Icon size={22} aria-hidden />
-                    <span>{label}</span>
-                    <small>{hint}</small>
+                  <button
+                    type="button"
+                    key={kind}
+                    className={'choice' + (kind === 'status' ? ' primary' : '')}
+                    role="radio"
+                    aria-checked={f.kind === kind}
+                    onClick={() => update({ kind })}
+                  >
+                    <Icon size={kind === 'status' ? 28 : 22} aria-hidden />
+                    <span className="choice-text">
+                      <span>{label}</span>
+                      <small>{hint}</small>
+                    </span>
                   </button>
                 ))}
               </div>
@@ -268,6 +370,10 @@ function EntryForm({ identity, onDone }: { identity: Identity; onDone: (ref: str
 
         {step === 1 && f.kind === 'status' && (
           <>
+            <p className="note">
+              يمكنك تحديث حالتك متى تغيّرت؛ يُحفظ كل تحديث، وتعتمد المتابعة على آخر تحديث ترسله.
+              {prefilled && ' عُبّئت الإجابات من آخر تحديث أرسلته من هذا الجهاز — عدّلها حسب حالتك الآن.'}
+            </p>
             <div className="field">
               <span className="label">هل لديك حساب في منصة نفاذ للعمل الحر؟ <span className="req">*</span></span>
               {radios('has_account', HAS_ACCOUNT)}
@@ -451,6 +557,18 @@ function EntryForm({ identity, onDone }: { identity: Identity; onDone: (ref: str
               </label>
               {err('consent')}
             </div>
+            {canRemember && (
+              <label className="option remember">
+                <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+                <span>
+                  تذكّر بياناتي على هذا الجهاز (اختياري)
+                  <span className="hint">
+                    الاسم والبريد وآخر إجابات حالة الحساب فقط، في متصفحك لا على الخادم، وتُحذف تلقائيًا بعد {REMEMBER_DAYS} يومًا.
+                    {rememberDefault && ' إلغاء التحديد يمسح البيانات المحفوظة عند الإرسال.'}
+                  </span>
+                </span>
+              </label>
+            )}
             {submitError && (
               <div className="alert" role="alert">
                 <AlertCircle size={18} aria-hidden /> {submitError}

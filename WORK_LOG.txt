@@ -45,4 +45,15 @@ WORK_LOG — سجل زمني مختصر
 - .env.local مملوء من المستخدمة (VITE_SUPABASE_URL، مفتاح publishable عام، VITE_PUBLIC_URL) ومستثنى من Git؛ لم تُطبع القيم.
 - فحص أسرار/بيانات شخصية على الملفات المرفوعة: لا شيء. git diff --check نظيف.
 - tsc OK، build ناجح، npm test 31/31. Commit: «feat: complete freelancer tracker dashboard and Supabase integration» → push origin main.
-- لم يُختبر بعد: الحفظ السحابي/دخول الإدارة/رفع الصور/Realtime على Supabase الحقيقي، وحالة نشر Vercel (لا وصول CLI).
+- لم يُختبر بعد: الحفظ السحابي/دخول الإدارة/رفع الصور/Realtime على Supabase الحقيقي.
+- النتيجة: commit 2bab73c دُفع (283d9fe..2bab73c، fast-forward). حالة GitHub من Vercel: success «Deployment has completed».
+  الموقع المنشور: / و /admin = 200، الحزمة الجديدة منشورة، ورابط Supabase موجود في الحزمة ⇒ متغيرات VITE_* مضبوطة في Vercel
+  (الموقع في الوضع السحابي، ليس Demo). هذا السطر مُضاف محليًا بعد الدفع (غير مرفوع).
+2026-10-27 الجلسة 7 (المرحلة 1: المتابعة المستمرة + تبسيط الإدارة — تحليل ثم تنفيذ بموافقة، دون Commit/Push)
+- تحليل: الإرسال المتكرر يُحفظ كله وآخر حالة صحيحة؛ اكتُشف أن loadAll بلا ترقيم (حد 1000 صف) والبريد غير متحقق منه.
+- جديد: src/lib/remember.ts، src/lib/paginate.ts، src/lib/followup.test.ts (13 اختبارًا).
+- معدّل: PublicPage.tsx (خيار رئيسي، ?action=، تذكّرني، ترحيب ومسح، «تحديث حالتي لاحقًا»)، AdminPage.tsx (ملخص قابل للضغط،
+  تبويب تحديثات الحالة، فلاتر مشتركة، «مفتوحة» للبلاغات، فلتر «لم يرد» للقائمة)، stats.ts، supabaseApi.ts (ترقيم)، visit.ts، styles.css.
+- اختبار المتصفح وجد: (1) saveRemembered كان يمرر حقولًا زائدة ⇒ أُصلح بحقول صريحة؛ (2) trackVisit يُسقط الصفحة عند حظر التخزين ⇒ أُصلح.
+- النتائج: tsc OK، build OK، vitest 44/44، git diff --check نظيف، متصفح 60/60 (خادم Demo بمتغيرات Supabase فارغة على 5175، أُوقف بعدها).
+- لا SQL، لا RLS، لا Auth، لا مساس ببيانات Supabase، لا Commit/Push/نشر.

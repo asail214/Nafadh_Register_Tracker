@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
-import type { Api, Ticket } from './types';
+import type { Api, StatusUpdate, Target, Ticket } from './types';
 import { extFor } from './image';
+import { fetchAllPages } from './paginate';
 import { normalizeEmail, normalizeName } from './validation';
 
 const BUCKET = 'attachments';
@@ -51,17 +52,19 @@ export function createSupabaseApi(url: string, anonKey: string): Api {
       return !error && data === true;
     },
     async loadAll() {
+      // paged by id (stable while new rows arrive); same RLS-filtered queries as before, just in pages
+      const all = <T extends { id: number }>(table: string, columns = '*') =>
+        fetchAllPages<T>(async (from, to) => (check(await sb.from(table).select(columns).order('id').range(from, to)) ?? []) as unknown as T[]);
+      const newestFirst = <T extends { id: number }>(rows: T[]) => rows.reverse();
       const [targets, statuses, tickets] = await Promise.all([
-        sb.from('targets').select('*').order('created_at'),
-        sb.from('status_updates').select('*').order('created_at', { ascending: false }),
-        sb.from('tickets').select('*, ticket_attachments(path)').order('created_at', { ascending: false }),
+        all<Target>('targets'),
+        all<StatusUpdate>('status_updates').then(newestFirst),
+        all<Ticket & { ticket_attachments: { path: string }[] }>('tickets', '*, ticket_attachments(path)').then(newestFirst),
       ]);
       return {
-        targets: check(targets) ?? [],
-        statuses: check(statuses) ?? [],
-        tickets: ((check(tickets) ?? []) as (Ticket & { ticket_attachments: { path: string }[] })[]).map(
-          ({ ticket_attachments, ...t }) => ({ ...t, attachments: ticket_attachments.map((a) => a.path) }),
-        ),
+        targets,
+        statuses,
+        tickets: tickets.map(({ ticket_attachments, ...t }) => ({ ...t, attachments: ticket_attachments.map((a) => a.path) })),
       };
     },
     async addTargets(rows) {

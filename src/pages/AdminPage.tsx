@@ -1,13 +1,25 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import QRCode from 'qrcode';
-import { Bell, CheckCheck, FileSpreadsheet } from 'lucide-react';
+import { ArrowLeft, Bell, CheckCheck, FileSpreadsheet } from 'lucide-react';
 import { Header } from '../App';
 import { api, PUBLIC_URL } from '../lib/api';
 import { downloadBlob, downloadCsv, extractTargets, parseCsv } from '../lib/csv';
 import { resetDemoData } from '../lib/demoApi';
 import { exportExcel } from '../lib/excel';
 import { HAS_ACCOUNT, ISSUE_CATEGORY, MISSING_PARTS, PROFILE_STATUS, TICKET_KIND, TICKET_STATUS } from '../lib/labels';
-import { computeConversion, computeStats, outsideRespondents, targetRows, type Conversion, type Stats } from '../lib/stats';
+import {
+  computeConversion,
+  computeStats,
+  emptyStatusFilter,
+  filterStatusRows,
+  isOpen,
+  outsideRespondents,
+  statusRows,
+  targetRows,
+  type Conversion,
+  type StatusFilter,
+  type Stats,
+} from '../lib/stats';
 import { ticketRef, type Dataset, type FeedKind, type Target, type Ticket, type TicketStatus, type VisitStats } from '../lib/types';
 import { emailError, nameError } from '../lib/validation';
 
@@ -92,10 +104,41 @@ function Login({ onDone }: { onDone: () => void }) {
   );
 }
 
-type Tab = 'stats' | 'targets' | 'tickets';
+type Tab = 'stats' | 'statuses' | 'tickets' | 'targets';
+
+interface TicketFilter {
+  q: string;
+  kind: string;
+  /** '' | 'open' (new + in review) | a TicketStatus */
+  status: string;
+  category: string;
+}
+interface TargetFilter {
+  q: string;
+  /** '' | 'yes' (sent something) | 'no' (nothing yet) */
+  resp: string;
+}
+const emptyTicketFilter = (): TicketFilter => ({ q: '', kind: '', status: '', category: '' });
+const emptyTargetFilter = (): TargetFilter => ({ q: '', resp: '' });
+
+/** Where a summary card leads: a tab plus the filter it opens with (other filters are reset). */
+type Go =
+  | { tab: 'statuses'; filter?: Partial<StatusFilter> }
+  | { tab: 'tickets'; filter?: Partial<TicketFilter> }
+  | { tab: 'targets'; filter?: Partial<TargetFilter> };
 
 function Dashboard() {
   const [tab, setTab] = useState<Tab>('stats');
+  const [statusF, setStatusF] = useState<StatusFilter>(emptyStatusFilter);
+  const [ticketF, setTicketF] = useState<TicketFilter>(emptyTicketFilter);
+  const [targetF, setTargetF] = useState<TargetFilter>(emptyTargetFilter);
+  const go = (to: Go) => {
+    if (to.tab === 'statuses') setStatusF({ ...emptyStatusFilter(), ...to.filter });
+    else if (to.tab === 'tickets') setTicketF({ ...emptyTicketFilter(), ...to.filter });
+    else setTargetF({ ...emptyTargetFilter(), ...to.filter });
+    setTab(to.tab);
+    document.querySelector('.tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
   const [data, setData] = useState<Dataset | null>(null);
   const [visits, setVisits] = useState<VisitStats | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -180,9 +223,10 @@ function Dashboard() {
       <div className="tabs" role="tablist">
         {(
           [
-            ['stats', 'الإحصاءات'],
-            ['targets', 'المستقلون المستهدفون'],
+            ['stats', 'الملخص'],
+            ['statuses', 'تحديثات الحالة'],
             ['tickets', 'البلاغات والمقترحات'],
+            ['targets', 'المستقلون المستهدفون'],
           ] as const
         ).map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
@@ -197,127 +241,369 @@ function Dashboard() {
       {!data ? (
         <p>جارٍ التحميل…</p>
       ) : tab === 'stats' ? (
-        <StatsTab stats={computeStats(data)} visits={visits} conversion={computeConversion(data, visits)} />
+        <StatsTab stats={computeStats(data)} visits={visits} conversion={computeConversion(data, visits)} go={go} />
+      ) : tab === 'statuses' ? (
+        <StatusesTab data={data} f={statusF} setF={setStatusF} />
       ) : tab === 'targets' ? (
-        <TargetsTab data={data} reload={reload} />
+        <TargetsTab data={data} reload={reload} f={targetF} setF={setTargetF} />
       ) : (
-        <TicketsTab tickets={data.tickets} reload={reload} />
+        <TicketsTab tickets={data.tickets} reload={reload} f={ticketF} setF={setTicketF} />
       )}
     </>
   );
 }
 
-/* ---------------- Stats ---------------- */
+/* ---------------- Summary ---------------- */
 
-function Stat({ k, v, sub }: { k: string; v: number | string | null; sub?: string }) {
-  const na = v === null;
+/** Summary card: bold title, prominent number; a button when it leads to a filtered list. */
+function Card({ title, value, sub, onClick }: { title: string; value: number | string; sub?: React.ReactNode; onClick?: () => void }) {
+  const body = (
+    <>
+      <span className="k">{title}</span>
+      <span className="v">{value}</span>
+      {sub && <span className="sub">{sub}</span>}
+    </>
+  );
+  return onClick ? (
+    <button type="button" className="stat clickable" onClick={onClick}>
+      {body}
+      <span className="go">
+        عرض القائمة <ArrowLeft size={14} aria-hidden />
+      </span>
+    </button>
+  ) : (
+    <div className="stat">{body}</div>
+  );
+}
+
+/** Distribution of the latest self-report per person; each row opens the matching filtered list. */
+function Distribution({ title, counts, labels, total, onPick }: { title: string; counts: Record<string, number>; labels: Record<string, string>; total: number; onPick: (key: string) => void }) {
   return (
-    <div className="stat">
-      <div className={'v' + (na ? ' na' : '')}>{na ? 'غير متاح حتى استيراد القائمة' : v}</div>
-      <div className="k">{k}</div>
-      {sub && <div className="muted small">{sub}</div>}
+    <div className="stat dist">
+      <span className="k">{title}</span>
+      {total === 0 ? (
+        <span className="muted small">لا توجد تحديثات حالة بعد.</span>
+      ) : (
+        Object.entries(labels).map(([k, l]) => {
+          const n = counts[k] ?? 0;
+          return (
+            <button type="button" key={k} className="dist-row" onClick={() => onPick(k)} aria-label={`${l}: ${n} — عرض القائمة`}>
+              <span className="dist-label">{l}</span>
+              <strong>{n}</strong>
+              <span className="bar" aria-hidden>
+                <span style={{ width: `${(n / total) * 100}%` }} />
+              </span>
+            </button>
+          );
+        })
+      )}
     </div>
   );
 }
 
-const rate = (r: number | null) => (r === null ? null : `${r}%`);
+const rate = (r: number | null) => (r === null ? '—' : `${r}%`);
 
-function Breakdown({ title, counts, labels }: { title: string; counts: Record<string, number>; labels: Record<string, string> }) {
-  return (
-    <div className="stat">
-      <div className="k" style={{ fontWeight: 600, color: 'var(--text)' }}>
-        {title}
-      </div>
-      {Object.entries(labels).map(([k, l]) => (
-        <div key={k} style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span>{l}</span>
-          <strong>{counts[k] ?? 0}</strong>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function StatsTab({ stats: s, visits, conversion }: { stats: Stats; visits: VisitStats | null; conversion: Conversion | null }) {
+function StatsTab({ stats: s, visits, conversion, go }: { stats: Stats; visits: VisitStats | null; conversion: Conversion | null; go: (to: Go) => void }) {
   return (
     <>
-      <h2>الزيارات والتحويل</h2>
-      {visits ? (
+      <div className="grid summary-grid">
+        <Card
+          title="المستقلون المشاركون"
+          value={s.respondents}
+          sub={`أرسلوا حالة أو بلاغًا أو اقتراحًا · منهم ${s.statusRespondents} بتحديث حالة`}
+          onClick={() => go({ tab: 'statuses' })}
+        />
+        <Card
+          title="تحديثات الحالة"
+          value={s.statusUpdates}
+          sub={`من ${s.statusRespondents} مستقل · تُحتسب آخر حالة لكل شخص`}
+          onClick={() => go({ tab: 'statuses', filter: { view: 'all' } })}
+        />
+        <Card
+          title="المشكلات المفتوحة"
+          value={s.openIssues}
+          sub={`تمنع الإكمال: ${s.openIssuesBlocking} · الإجمالي: ${s.issues}`}
+          onClick={() => go({ tab: 'tickets', filter: { kind: 'issue', status: 'open' } })}
+        />
+        <Card
+          title="الاقتراحات"
+          value={s.suggestions}
+          sub={`بانتظار المعالجة: ${s.openSuggestions}`}
+          onClick={() => go({ tab: 'tickets', filter: { kind: 'suggestion' } })}
+        />
+      </div>
+
+      <h2>الإفادة الذاتية (آخر تحديث لكل مستقل)</h2>
+      <div className="grid dist-grid">
+        <Distribution
+          title="توزيع اكتمال الملفات"
+          counts={s.profileStatus}
+          labels={PROFILE_STATUS}
+          total={s.statusRespondents}
+          onPick={(k) => go({ tab: 'statuses', filter: { profile_status: k } })}
+        />
+        <Distribution
+          title="هل لديه حساب في المنصة؟"
+          counts={s.hasAccount}
+          labels={HAS_ACCOUNT}
+          total={s.statusRespondents}
+          onPick={(k) => go({ tab: 'statuses', filter: { has_account: k } })}
+        />
+      </div>
+      <p className="muted small">إفادة ذاتية من المستقل، لا تحقق إداري. عدم إرسال حالة لا يعني عدم التسجيل.</p>
+
+      {s.hasList ? (
         <>
+          <h2>القائمة المرجعية</h2>
           <div className="grid">
-            <Stat k="إجمالي الزيارات" v={visits.total} sub="زيارة لكل جلسة متصفح، بدون صفحة الإدارة" />
-            <Stat k="الزوار الفريدون (تقريبي)" v={visits.unique} sub="معرّف عشوائي في المتصفح، بلا IP" />
-            <Stat k="المشاركون منذ بدء القياس" v={conversion?.submitters ?? 0} sub={`${conversion?.entries ?? 0} مشاركة`} />
-            <Stat k="نسبة التحويل" v={conversion?.rate == null ? '—' : `${conversion.rate}%`} sub="المشاركون الفريدون ÷ الزوار الفريدون × 100" />
+            <Card title="المستقلون في القائمة" value={s.totalTargets} onClick={() => go({ tab: 'targets' })} />
+            <Card title="نسبة المشاركة" value={rate(s.participationRate)} sub="المستجيبون من القائمة ÷ إجمالي القائمة" />
+            <Card title="المستجيبون من القائمة" value={s.respondentsInList} onClick={() => go({ tab: 'targets', filter: { resp: 'yes' } })} />
+            <Card title="لم يردوا بعد" value={s.nonRespondents ?? 0} sub="عدم الرد لا يعني عدم التسجيل" onClick={() => go({ tab: 'targets', filter: { resp: 'no' } })} />
+            {s.respondentsOutsideList > 0 && (
+              <Card title="مستجيبون من خارج القائمة" value={s.respondentsOutsideList} sub="أي مشاركة ببريد غير مدرج" />
+            )}
           </div>
-          <p className="muted small">
-            النسبة تقريبية: الشخص نفسه قد يزور من أكثر من جهاز أو متصفح، وتُحسب فقط المشاركات المرسلة بعد أول زيارة مسجّلة
-            {visits.since ? ` (${fmt(visits.since)})` : ''}. تكرار الزيارة خلال 30 دقيقة من المتصفح نفسه لا يُحسب زيارة جديدة.
-          </p>
+          <h2>التحقق الإداري</h2>
+          <p className="muted small">«أفاد» = آخر إفادة ذاتية من مستقلي القائمة. «متحقق» = أكّدته الإدارة يدويًا في القائمة.</p>
+          <div className="grid">
+            <Card title="أفاد بأن لديه حساب" value={rate(s.registeredReportedRate)} sub="من القائمة (إفادة ذاتية)" />
+            <Card title="تسجيل متحقق منه" value={s.registeredVerified} sub={`من القائمة: ${rate(s.registeredVerifiedRate)}`} />
+            <Card title="أفاد باكتمال الملف" value={rate(s.profileReportedRate)} sub="من القائمة (إفادة ذاتية)" />
+            <Card title="اكتمال متحقق منه" value={s.profileCompleteVerified} sub={`من القائمة: ${rate(s.profileVerifiedRate)}`} />
+          </div>
         </>
       ) : (
-        <p className="muted">إحصاءات الزيارات غير متاحة بعد (يلزم تنفيذ ملف supabase/002_visits_notifications.sql).</p>
+        <p className="note list-hint">
+          نسب المشاركة والتحقق الإداري تظهر بعد استيراد القائمة المرجعية.{' '}
+          <button className="btn link" onClick={() => go({ tab: 'targets' })}>
+            استيراد القائمة
+          </button>
+        </p>
       )}
 
-      <h2>المشاركة</h2>
-      <div className="grid">
-        <Stat k="إجمالي المستقلين المستهدفين" v={s.hasList ? s.totalTargets : null} />
-        <Stat k="نسبة المشاركة (المستجيبون من القائمة ÷ القائمة)" v={rate(s.participationRate)} />
-        <Stat k="المستجيبون الفريدون من القائمة" v={s.hasList ? s.respondentsInList : null} />
-        <Stat k="لم يردوا بعد" v={s.nonRespondents} sub="عدم الرد لا يعني عدم التسجيل" />
-        <Stat k="إجمالي المستجيبين الفريدين" v={s.respondents} />
-        <Stat k="مستجيبون من خارج القائمة" v={s.respondentsOutsideList} />
-      </div>
+      <section className="secondary">
+        <h3>الزيارات والتحويل</h3>
+        {visits ? (
+          <>
+            <dl className="mini">
+              <div>
+                <dt>إجمالي الزيارات</dt>
+                <dd>{visits.total}</dd>
+              </div>
+              <div>
+                <dt>الزوار الفريدون (تقريبي)</dt>
+                <dd>{visits.unique}</dd>
+              </div>
+              <div>
+                <dt>المشاركون منذ بدء القياس</dt>
+                <dd>{conversion?.submitters ?? 0}</dd>
+              </div>
+              <div>
+                <dt>نسبة التحويل</dt>
+                <dd>{conversion?.rate == null ? '—' : `${conversion.rate}%`}</dd>
+              </div>
+            </dl>
+            <p className="muted small">
+              زيارة لكل جلسة متصفح بمعرّف عشوائي بلا IP، دون صفحة الإدارة. النسبة تقريبية وتشمل المشاركات منذ أول زيارة مسجّلة
+              {visits.since ? ` (${fmt(visits.since)})` : ''}.
+            </p>
+          </>
+        ) : (
+          <p className="muted small">غير متاحة بعد (يلزم تنفيذ ملف supabase/002_visits_notifications.sql).</p>
+        )}
+      </section>
 
-      <h2>التسجيل واكتمال الملف</h2>
-      <p className="muted small">«أفاد» = إفادة ذاتية بحسب آخر تحديث من الشخص. «متحقق» = أكّدته الإدارة يدويًا.</p>
-      <div className="grid">
-        <Stat k="أفاد بأن لديه حساب" v={s.registeredReported} sub={s.hasList ? `من القائمة: ${rate(s.registeredReportedRate)}` : undefined} />
-        <Stat k="تسجيل متحقق منه" v={s.registeredVerified} sub={s.hasList ? `من القائمة: ${rate(s.registeredVerifiedRate)}` : undefined} />
-        <Stat k="أفاد باكتمال الملف" v={s.profileCompleteReported} sub={s.hasList ? `من القائمة: ${rate(s.profileReportedRate)}` : undefined} />
-        <Stat k="اكتمال متحقق منه" v={s.profileCompleteVerified} sub={s.hasList ? `من القائمة: ${rate(s.profileVerifiedRate)}` : undefined} />
-        <Breakdown title="هل لديه حساب؟ (آخر إفادة)" counts={s.hasAccount} labels={HAS_ACCOUNT} />
-        <Breakdown title="حالة الملف (آخر إفادة)" counts={s.profileStatus} labels={PROFILE_STATUS} />
-      </div>
+      <section className="secondary">
+        <h3>رمز QR للرابط العام</h3>
+        {PUBLIC_URL ? (
+          <button
+            className="btn outline sm"
+            onClick={async () => {
+              const url = await QRCode.toDataURL(PUBLIC_URL, { width: 600, margin: 2, color: { dark: '#24529b' } });
+              downloadBlob('nafadh-tracker-qr.png', await (await fetch(url)).blob());
+            }}
+          >
+            تنزيل QR لـ {PUBLIC_URL}
+          </button>
+        ) : (
+          <p className="muted small">غير متاح: لم يُحدَّد رابط نشر حقيقي بعد (المتغير VITE_PUBLIC_URL).</p>
+        )}
+      </section>
+    </>
+  );
+}
 
-      <h2>البلاغات والمقترحات</h2>
-      <div className="grid">
-        <Stat k="إجمالي المشكلات" v={s.issues} sub={`تمنع إكمال الإجراء: ${s.issuesBlocking}`} />
-        <Breakdown title="المشكلات حسب الحالة" counts={s.issuesByStatus} labels={TICKET_STATUS} />
-        <Breakdown title="المشكلات حسب التصنيف" counts={s.issuesByCategory} labels={ISSUE_CATEGORY} />
-        <Stat k="إجمالي الاقتراحات" v={s.suggestions} />
-        <Breakdown title="الاقتراحات حسب الحالة" counts={s.suggestionsByStatus} labels={TICKET_STATUS} />
-      </div>
+/* ---------------- Status updates (all respondents, with or without a target list) ---------------- */
 
-      <h2>رمز QR للرابط العام</h2>
-      {PUBLIC_URL ? (
-        <button
-          className="btn outline"
-          onClick={async () => {
-            const url = await QRCode.toDataURL(PUBLIC_URL, { width: 600, margin: 2, color: { dark: '#24529b' } });
-            downloadBlob('nafadh-tracker-qr.png', await (await fetch(url)).blob());
-          }}
-        >
-          تنزيل QR لـ {PUBLIC_URL}
+const tri = (v: boolean | null) => (v === null ? 'غير محدد' : v ? 'نعم' : 'لا');
+
+function StatusesTab({ data, f, setF }: { data: Dataset; f: StatusFilter; setF: (f: StatusFilter) => void }) {
+  const rows = useMemo(() => statusRows(data, f.view), [data, f.view]);
+  const shown = filterStatusRows(rows, f);
+  const hasList = data.targets.length > 0;
+  const [open, setOpen] = useState<string | null>(null);
+  const history = (email: string) => statusRows(data, 'all').filter((r) => r.status.email === email);
+  const sel = (k: 'has_account' | 'profile_status' | 'missing' | 'list', all: string, labels: Record<string, string>) => (
+    <select value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} aria-label={all}>
+      <option value="">{all}</option>
+      {Object.entries(labels).map(([v, l]) => (
+        <option key={v} value={v}>
+          {l}
+        </option>
+      ))}
+    </select>
+  );
+  const filtered = !!(f.q || f.has_account || f.profile_status || f.missing || f.list);
+  const cols = hasList ? 8 : 7;
+
+  function exportCsv() {
+    if (!confirm(PII_NOTE)) return;
+    downloadCsv(`status-updates-${f.view}-${stamp()}.csv`, [
+      ['التاريخ', 'الاسم', 'البريد', 'لديه حساب (إفادة)', 'حالة الملف (إفادة)', 'الأجزاء الناقصة', 'ملاحظات', 'عدد التحديثات', 'في القائمة', 'تسجيل متحقق', 'اكتمال متحقق'],
+      ...shown.map(({ status: s, updates, target }) => [
+        s.created_at,
+        s.full_name,
+        s.email,
+        HAS_ACCOUNT[s.has_account],
+        PROFILE_STATUS[s.profile_status],
+        s.missing_parts.map((m) => MISSING_PARTS[m]).join('، '),
+        s.notes ?? '',
+        updates,
+        !hasList ? 'لا توجد قائمة' : target ? 'نعم' : 'لا',
+        target ? tri(target.registered_verified) : '',
+        target ? tri(target.profile_verified) : '',
+      ]),
+    ]);
+  }
+
+  return (
+    <>
+      <div className="segmented" role="group" aria-label="طريقة العرض">
+        <button type="button" aria-pressed={f.view === 'latest'} onClick={() => setF({ ...f, view: 'latest' })}>
+          آخر حالة لكل مستقل
         </button>
-      ) : (
-        <p className="muted">غير متاح: لم يُحدَّد رابط نشر حقيقي بعد (المتغير VITE_PUBLIC_URL).</p>
-      )}
+        <button type="button" aria-pressed={f.view === 'all'} onClick={() => setF({ ...f, view: 'all' })}>
+          جميع التحديثات
+        </button>
+      </div>
+      <div className="toolbar">
+        <input type="search" placeholder="بحث بالاسم أو البريد" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
+        {sel('has_account', 'كل إجابات الحساب', HAS_ACCOUNT)}
+        {sel('profile_status', 'كل حالات الملف', PROFILE_STATUS)}
+        {sel('missing', 'كل الأجزاء الناقصة', MISSING_PARTS)}
+        {hasList && sel('list', 'داخل القائمة وخارجها', { in: 'من القائمة', out: 'من خارج القائمة' })}
+        {filtered && (
+          <button className="btn link" onClick={() => setF({ ...emptyStatusFilter(), view: f.view })}>
+            إزالة الفلاتر
+          </button>
+        )}
+        <span className="muted small">
+          {shown.length} من {rows.length} {f.view === 'latest' ? 'مستقل' : 'تحديث'}
+        </span>
+        <button className="btn outline sm" onClick={exportCsv} style={{ marginInlineStart: 'auto' }}>
+          تصدير CSV
+        </button>
+      </div>
+      <p className="muted small">
+        {f.view === 'latest' ? 'الفلاتر تُطبَّق على آخر تحديث لكل مستقل. ' : 'الفلاتر تُطبَّق على كل تحديث على حدة. '}
+        الإجابات إفادة ذاتية{hasList ? '، والتحقق الإداري يُعدَّل من تبويب «المستقلون المستهدفون»' : ''}.
+      </p>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>التاريخ</th>
+              <th>الاسم</th>
+              <th>البريد</th>
+              <th>لديه حساب (إفادة)</th>
+              <th>الملف (إفادة)</th>
+              <th>{f.view === 'latest' ? 'التحديثات' : 'ملاحظات'}</th>
+              {hasList && <th>التحقق الإداري</th>}
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.length === 0 && (
+              <tr>
+                <td colSpan={cols} className="muted">
+                  {rows.length ? 'لا توجد نتائج مطابقة للفلاتر.' : 'لا توجد تحديثات حالة بعد.'}
+                </td>
+              </tr>
+            )}
+            {shown.map(({ status: s, updates, target }) => (
+              <Fragment key={s.id}>
+                <tr>
+                  <td className="nowrap">{fmt(s.created_at)}</td>
+                  <td>{s.full_name}</td>
+                  <td className="ltr">{s.email}</td>
+                  <td>{HAS_ACCOUNT[s.has_account]}</td>
+                  <td>
+                    {PROFILE_STATUS[s.profile_status]}
+                    {s.missing_parts.length > 0 && <div className="muted small">ناقص: {s.missing_parts.map((m) => MISSING_PARTS[m]).join('، ')}</div>}
+                  </td>
+                  <td>{f.view === 'latest' ? updates : s.notes ? <span className="clip">{s.notes}</span> : <span className="muted">—</span>}</td>
+                  {hasList && (
+                    <td className="small">
+                      {target ? (
+                        <>
+                          تسجيل: {tri(target.registered_verified)}
+                          <br />
+                          اكتمال: {tri(target.profile_verified)}
+                        </>
+                      ) : (
+                        <span className="muted">خارج القائمة</span>
+                      )}
+                    </td>
+                  )}
+                  <td>
+                    {f.view === 'latest' && (
+                      <button className="btn link" onClick={() => setOpen(open === s.email ? null : s.email)}>
+                        {open === s.email ? 'إخفاء' : `السجل (${updates})`}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+                {f.view === 'latest' && open === s.email && (
+                  <tr>
+                    <td colSpan={cols} style={{ background: 'var(--bg-alt)' }}>
+                      <ul className="history">
+                        {history(s.email).map(({ status: h }) => (
+                          <li key={h.id}>
+                            {fmt(h.created_at)} — حساب: {HAS_ACCOUNT[h.has_account]}، الملف: {PROFILE_STATUS[h.profile_status]}
+                            {h.missing_parts.length ? ` (ناقص: ${h.missing_parts.map((m) => MISSING_PARTS[m]).join('، ')})` : ''}
+                            {h.notes && <div className="muted small">ملاحظة: {h.notes}</div>}
+                          </li>
+                        ))}
+                      </ul>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
 
 /* ---------------- Targets ---------------- */
 
-function TargetsTab({ data, reload }: { data: Dataset; reload: () => Promise<void> }) {
+function TargetsTab({ data, reload, f, setF }: { data: Dataset; reload: () => Promise<void>; f: TargetFilter; setF: (f: TargetFilter) => void }) {
   const rows = useMemo(() => targetRows(data), [data]);
   const outside = useMemo(() => outsideRespondents(data), [data]);
-  const [q, setQ] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const [manual, setManual] = useState({ full_name: '', email: '' });
 
-  const shown = rows.filter((r) => !q || r.target.full_name.includes(q) || r.target.email.includes(q.toLowerCase()));
+  const q = f.q.trim();
+  const responded = (r: (typeof rows)[number]) => r.lastActivity !== null;
+  const shown = rows.filter(
+    (r) =>
+      (!f.resp || (f.resp === 'yes') === responded(r)) &&
+      (!q || r.target.full_name.includes(q) || r.target.email.includes(q.toLowerCase())),
+  );
 
   async function importFile(file: File) {
     const res = extractTargets(parseCsv(await file.text()), new Set(data.targets.map((t) => t.email)));
@@ -388,7 +674,12 @@ function TargetsTab({ data, reload }: { data: Dataset; reload: () => Promise<voi
       </div>
 
       <div className="toolbar">
-        <input type="search" placeholder="بحث بالاسم أو البريد" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input type="search" placeholder="بحث بالاسم أو البريد" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
+        <select value={f.resp} onChange={(e) => setF({ ...f, resp: e.target.value })} aria-label="المشاركة">
+          <option value="">الكل</option>
+          <option value="yes">شارك (حالة أو بلاغ أو اقتراح)</option>
+          <option value="no">لم يرد بعد</option>
+        </select>
         <span className="muted small">{shown.length} من {rows.length}</span>
         <button className="btn outline sm" onClick={exportCsv} style={{ marginInlineStart: 'auto' }}>
           تصدير CSV
@@ -528,17 +819,16 @@ function TargetDetails({ row, onPatch, onDelete }: { row: ReturnType<typeof targ
 
 /* ---------------- Tickets ---------------- */
 
-function TicketsTab({ tickets, reload }: { tickets: Ticket[]; reload: () => Promise<void> }) {
-  const [f, setF] = useState({ q: '', kind: '', status: '', category: '' });
+function TicketsTab({ tickets, reload, f, setF }: { tickets: Ticket[]; reload: () => Promise<void>; f: TicketFilter; setF: (f: TicketFilter) => void }) {
   const [open, setOpen] = useState<number | null>(null);
   const shown = tickets.filter(
     (t) =>
       (!f.kind || t.kind === f.kind) &&
-      (!f.status || t.status === f.status) &&
+      (!f.status || (f.status === 'open' ? isOpen(t) : t.status === f.status)) &&
       (!f.category || t.category === f.category) &&
       (!f.q || [ticketRef(t.id), t.title, t.description, t.full_name, t.email].some((x) => x.toLowerCase().includes(f.q.toLowerCase()))),
   );
-  const sel = (k: keyof typeof f, all: string, labels: Record<string, string>) => (
+  const sel = (k: keyof TicketFilter, all: string, labels: Record<string, string>) => (
     <select value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })}>
       <option value="">{all}</option>
       {Object.entries(labels).map(([v, l]) => (
@@ -579,7 +869,7 @@ function TicketsTab({ tickets, reload }: { tickets: Ticket[]; reload: () => Prom
       <div className="toolbar">
         <input type="search" placeholder="بحث (مرجع، عنوان، اسم، بريد)" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
         {sel('kind', 'كل الأنواع', TICKET_KIND)}
-        {sel('status', 'كل الحالات', TICKET_STATUS)}
+        {sel('status', 'كل الحالات', { open: 'مفتوحة (جديد + قيد المراجعة)', ...TICKET_STATUS })}
         {sel('category', 'كل التصنيفات', ISSUE_CATEGORY)}
         <span className="muted small">{shown.length} من {tickets.length}</span>
         <button className="btn outline sm" onClick={exportCsv} style={{ marginInlineStart: 'auto' }}>

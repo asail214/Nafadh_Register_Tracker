@@ -1,4 +1,4 @@
-import type { Dataset, StatusUpdate, Target, VisitStats } from './types';
+import type { Dataset, StatusUpdate, Target, Ticket, VisitStats } from './types';
 
 /** Newest first; ties on timestamp are broken by id (ids are increasing). */
 const newestFirst = (a: StatusUpdate, b: StatusUpdate) => b.created_at.localeCompare(a.created_at) || b.id - a.id;
@@ -12,6 +12,8 @@ export function latestStatusByEmail(statuses: StatusUpdate[]): Map<string, Statu
   return m;
 }
 
+export const isOpen = (t: Pick<Ticket, 'status'>) => t.status !== 'resolved';
+
 const pct = (n: number, total: number) => (total > 0 ? Math.round((n / total) * 1000) / 10 : null);
 
 function countBy<T>(items: T[], key: (t: T) => string) {
@@ -24,6 +26,9 @@ export interface Stats {
   totalTargets: number;
   hasList: boolean;
   respondents: number;
+  /** all status rows (history included) and the distinct people who sent them */
+  statusUpdates: number;
+  statusRespondents: number;
   respondentsInList: number;
   respondentsOutsideList: number;
   nonRespondents: number | null;
@@ -42,7 +47,11 @@ export interface Stats {
   issuesByStatus: Record<string, number>;
   issuesByCategory: Record<string, number>;
   issuesBlocking: number;
+  /** new + in review */
+  openIssues: number;
+  openIssuesBlocking: number;
   suggestions: number;
+  openSuggestions: number;
   suggestionsByStatus: Record<string, number>;
 }
 
@@ -61,11 +70,14 @@ export function computeStats({ targets, statuses, tickets }: Dataset): Stats {
   const profileCompleteVerified = targets.filter((t) => t.profile_verified === true).length;
   const issues = tickets.filter((t) => t.kind === 'issue');
   const suggestions = tickets.filter((t) => t.kind === 'suggestion');
+  const openIssues = issues.filter(isOpen);
 
   return {
     totalTargets: total,
     hasList: total > 0,
     respondents: respondentEmails.size,
+    statusUpdates: statuses.length,
+    statusRespondents: latest.length,
     respondentsInList: inList,
     respondentsOutsideList: respondentEmails.size - inList,
     nonRespondents: total > 0 ? total - inList : null,
@@ -84,7 +96,10 @@ export function computeStats({ targets, statuses, tickets }: Dataset): Stats {
     issuesByStatus: countBy(issues, (t) => t.status),
     issuesByCategory: countBy(issues, (t) => t.category ?? 'other'),
     issuesBlocking: issues.filter((t) => t.blocking).length,
+    openIssues: openIssues.length,
+    openIssuesBlocking: openIssues.filter((t) => t.blocking).length,
     suggestions: suggestions.length,
+    openSuggestions: suggestions.filter(isOpen).length,
     suggestionsByStatus: countBy(suggestions, (t) => t.status),
   };
 }
@@ -142,4 +157,49 @@ export function outsideRespondents({ targets, statuses, tickets }: Dataset) {
   for (const x of [...statuses, ...tickets].sort((a, b) => a.created_at.localeCompare(b.created_at)))
     if (!list.has(x.email)) m.set(x.email, x.full_name);
   return [...m].map(([email, full_name]) => ({ email, full_name }));
+}
+
+export interface StatusRow {
+  status: StatusUpdate;
+  /** number of status updates this email has sent */
+  updates: number;
+  /** the target-list entry for this email (admin verification lives there); null = not in the list */
+  target: Target | null;
+}
+
+export type StatusView = 'latest' | 'all';
+
+export interface StatusFilter {
+  view: StatusView;
+  q: string;
+  has_account: string;
+  profile_status: string;
+  missing: string;
+  /** '' | 'in' | 'out' — only meaningful when a target list exists */
+  list: string;
+}
+
+export const emptyStatusFilter = (): StatusFilter => ({ view: 'latest', q: '', has_account: '', profile_status: '', missing: '', list: '' });
+
+/**
+ * Status updates for every respondent, with or without a target list.
+ * "latest" = one row per email (its most recent update); "all" = full history, newest first.
+ */
+export function statusRows({ targets, statuses }: Dataset, view: StatusView): StatusRow[] {
+  const byEmail = new Map(targets.map((t) => [t.email, t]));
+  const counts = countBy(statuses, (s) => s.email);
+  const rows = view === 'latest' ? [...latestStatusByEmail(statuses).values()] : [...statuses];
+  return rows.sort(newestFirst).map((status) => ({ status, updates: counts[status.email], target: byEmail.get(status.email) ?? null }));
+}
+
+export function filterStatusRows(rows: StatusRow[], f: StatusFilter): StatusRow[] {
+  const q = f.q.trim().toLowerCase();
+  return rows.filter(
+    ({ status: s, target }) =>
+      (!f.has_account || s.has_account === f.has_account) &&
+      (!f.profile_status || s.profile_status === f.profile_status) &&
+      (!f.missing || s.missing_parts.includes(f.missing)) &&
+      (!f.list || (f.list === 'in') === (target !== null)) &&
+      (!q || s.full_name.toLowerCase().includes(q) || s.email.includes(q)),
+  );
 }
