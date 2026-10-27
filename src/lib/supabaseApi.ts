@@ -92,5 +92,28 @@ export function createSupabaseApi(url: string, anonKey: string): Api {
       const data = check(await sb.storage.from(BUCKET).createSignedUrls(paths, 600));
       return paths.map((p) => data?.find((d) => d.path === p)?.signedUrl ?? '');
     },
+    async recordVisit(visitorId) {
+      await sb.rpc('record_visit', { p_visitor: visitorId }); // best effort; failures are ignored
+    },
+    async visitStats() {
+      const { data, error } = await sb.rpc('visit_stats');
+      const row = (data as { total_visits: number; unique_visitors: number; first_visit: string | null }[] | null)?.[0];
+      if (error || !row) return null;
+      return { total: Number(row.total_visits), unique: Number(row.unique_visitors), since: row.first_visit };
+    },
+    async markSeen(kind, ids) {
+      if (!ids.length) return;
+      const table = kind === 'status' ? 'status_updates' : 'tickets';
+      check(await sb.from(table).update({ seen_at: new Date().toISOString() }).in('id', ids));
+    },
+    subscribe(onChange) {
+      // Realtime delivers only rows the signed-in user may SELECT under RLS, i.e. admins only.
+      const channel = sb
+        .channel('admin-feed')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'status_updates' }, onChange)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tickets' }, onChange)
+        .subscribe();
+      return () => void sb.removeChannel(channel);
+    },
   };
 }

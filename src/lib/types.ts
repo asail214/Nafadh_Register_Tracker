@@ -23,6 +23,8 @@ export interface StatusUpdate {
   missing_parts: string[];
   notes: string | null;
   created_at: string;
+  /** null = not yet reviewed by an admin; undefined when migration 002 is not applied */
+  seen_at?: string | null;
 }
 
 export interface Ticket {
@@ -37,8 +39,17 @@ export interface Ticket {
   status: TicketStatus;
   created_at: string;
   updated_at: string;
+  seen_at?: string | null;
   attachments: string[];
 }
+
+export interface VisitStats {
+  total: number;
+  unique: number;
+  since: string | null;
+}
+
+export type FeedKind = 'status' | 'ticket';
 
 export interface Dataset {
   targets: Target[];
@@ -91,6 +102,12 @@ export interface Api {
   deleteTarget(id: number): Promise<void>;
   setTicketStatus(id: number, status: TicketStatus): Promise<void>;
   attachmentUrls(paths: string[]): Promise<string[]>;
+  recordVisit(visitorId: string): Promise<void>;
+  /** null when visit analytics is not available (e.g. migration 002 not applied) */
+  visitStats(): Promise<VisitStats | null>;
+  markSeen(kind: FeedKind, ids: number[]): Promise<void>;
+  /** Calls onChange when new entries arrive; returns an unsubscribe function. */
+  subscribe(onChange: () => void): () => void;
 }
 
 export const ticketRef = (id: number) => 'NF-' + String(id).padStart(4, '0');

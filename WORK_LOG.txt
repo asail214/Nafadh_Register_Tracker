@@ -14,3 +14,35 @@ WORK_LOG — سجل زمني مختصر
 - git init (main) + commit أولي + push إلى https://github.com/asail214/Nafadh_Register_Tracker (دون force).
 - تشغيل محلي: http://localhost:5173/ و /admin (200). لا نشر على Vercel.
 - الخطوة التالية: مراجعة المستخدمة للتصميم ← ملاحظاتها ← ثم Supabase Free ← ثم قرار النشر.
+2026-10-27 الجلسة 3
+- قرار المستخدمة: سياسة Git صارمة (دفع فقط إلى asail214/Nafadh_Register_Tracker main) أُضيفت إلى CLAUDE.md.
+- فحص قراءة فقط: origin = المستودع الصحيح، الفرع main متتبع origin/main. الاعتماد: Git Credential Manager (helper=manager من
+  إعداد النظام) مع بيانات مخزّنة لـ github.com للمستخدم asail214 → صلاحية على مستوى الحساب، غير محصورة بالمستودع. gh CLI غير مثبت.
+- لم يُنفّذ Push. التغيير محلي فقط (CLAUDE.md, WORK_LOG.txt, PROJECT_CONTEXT.txt) بانتظار الموافقة.
+2026-10-27 الجلسة 4 (تحسين التصميم)
+- المستخدمة نشرت على Vercel وأنشأت Supabase عبر Marketplace. Push ممنوع حتى مراجعتها (النشر تلقائي).
+- السبب الجذري للمساحة البيضاء: logo-blue.png أبيض على شفاف ⇒ غير مرئي على الأبيض. الحل: رأس أزرق مع الشعار الأصلي.
+- PublicPage: 3 خطوات (أساسية/تفاصيل/مراجعة)، مؤشر خطوات بعلامة نجاح، شريط نسبة الحقول الإلزامية، تنبيه نقص،
+  السابق/التالي مع حفظ الإجابات، منطقة رفع بحدود متقطعة + سحب وإفلات + معاينة/حذف، صفحة مراجعة بروابط تعديل.
+- منطق الخطوات والنسبة في src/lib/formSteps.ts + formSteps.test.ts (6 اختبارات). lucide-react مضاف.
+- إصلاحات وجدها اختبار المتصفح: تمرير أفقي سببه حقل honeypot بـ left:-9999px في RTL؛ تنبيه الموافقة لم يظهر عند الإرسال؛
+  تخطيط منطقة الرفع (specificity)؛ شريط التقدم مختفٍ على 375px؛ التفاف رقم المرجع في جدول الإدارة.
+- AdminPage: تعديل className فقط (page)؛ تحسين CSS للجداول والفلاتر على الهاتف. لا تغيير على منطق البيانات أو schema.sql.
+- اختبار متصفح (Edge + playwright-core من مجلد scratchpad خارج المشروع) على 375/768/1440: المسارات الثلاثة، الصور، التنقل،
+  عدم وجود تمرير أفقي، لوحة الإدارة — بيانات خيالية فقط. النتيجة النهائية 84/84.
+- build ناجح، vitest 23/23. لا Push (التعديلات محلية بانتظار المراجعة). خادم محلي: http://localhost:5174/
+- الخطوة التالية: مراجعة المستخدمة ← Push بموافقتها ← إضافة VITE_* في Vercel ← تشغيل schema.sql في Supabase ← حساب إدارة.
+2026-10-27 الجلسة 5 (Excel، الزيارات، الإشعارات)
+- المستخدمة: schema.sql نُفّذ، bucket موجود، مستخدم Auth موجود (تفعيل الإدارة جارٍ). لا Push حتى المراجعة.
+- إضافة supabase/002_visits_notifications.sql + اختبارات PGlite له (9/9 مع تشغيله مرتين).
+- إضافة exceljs (lazy chunk) + override uuid ^11.1.1 (npm audit 0). excel.ts، visit.ts، computeConversion، Notifications.
+- اختبارات: vitest 31/31 (src 22 + supabase 9). build ناجح. متصفح: الميزات الجديدة 11/11، الاستجابة 84/84 (بيانات خيالية).
+- .env.local بقيم فارغة (لم تتوفر القيم العامة) ⇒ لم يُختبر الحفظ السحابي/الدخول/رفع الصور على Supabase الحقيقي.
+- الخطوة التالية: المستخدمة تملأ .env.local وتنفّذ 002 ⇒ اختبار سحابي ببيانات وهمية ⇒ مراجعة ⇒ Push بموافقة.
+- أوقف Claude Code الخادمين المحليين (5173/5174) بسبب انخفاض ذاكرة الجهاز؛ لا خلل في المشروع. التشغيل: npm run dev.
+2026-10-27 الجلسة 6 (Commit + Push بموافقة صريحة من المستخدمة)
+- تحقق قبل الدفع: pwd صحيح، الفرع main، origin = asail214/Nafadh_Register_Tracker، git fetch: لا جديد على البعيد (0/0).
+- .env.local مملوء من المستخدمة (VITE_SUPABASE_URL، مفتاح publishable عام، VITE_PUBLIC_URL) ومستثنى من Git؛ لم تُطبع القيم.
+- فحص أسرار/بيانات شخصية على الملفات المرفوعة: لا شيء. git diff --check نظيف.
+- tsc OK، build ناجح، npm test 31/31. Commit: «feat: complete freelancer tracker dashboard and Supabase integration» → push origin main.
+- لم يُختبر بعد: الحفظ السحابي/دخول الإدارة/رفع الصور/Realtime على Supabase الحقيقي، وحالة نشر Vercel (لا وصول CLI).

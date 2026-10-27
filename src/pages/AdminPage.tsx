@@ -1,12 +1,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import QRCode from 'qrcode';
+import { Bell, CheckCheck, FileSpreadsheet } from 'lucide-react';
 import { Header } from '../App';
 import { api, PUBLIC_URL } from '../lib/api';
 import { downloadBlob, downloadCsv, extractTargets, parseCsv } from '../lib/csv';
 import { resetDemoData } from '../lib/demoApi';
+import { exportExcel } from '../lib/excel';
 import { HAS_ACCOUNT, ISSUE_CATEGORY, MISSING_PARTS, PROFILE_STATUS, TICKET_KIND, TICKET_STATUS } from '../lib/labels';
-import { computeStats, outsideRespondents, targetRows, type Stats } from '../lib/stats';
-import { ticketRef, type Dataset, type Target, type Ticket, type TicketStatus } from '../lib/types';
+import { computeConversion, computeStats, outsideRespondents, targetRows, type Conversion, type Stats } from '../lib/stats';
+import { ticketRef, type Dataset, type FeedKind, type Target, type Ticket, type TicketStatus, type VisitStats } from '../lib/types';
 import { emailError, nameError } from '../lib/validation';
 
 const fmt = (iso: string | null) =>
@@ -37,7 +39,7 @@ export default function AdminPage() {
   return (
     <>
       <Header>{signOut}</Header>
-      <main className="container wide">
+      <main className="container wide page">
         {auth === 'loading' && <p>جارٍ التحقق…</p>}
         {auth === 'signed_out' && <Login onDone={refreshAuth} />}
         {auth === 'not_admin' && (
@@ -95,17 +97,34 @@ type Tab = 'stats' | 'targets' | 'tickets';
 function Dashboard() {
   const [tab, setTab] = useState<Tab>('stats');
   const [data, setData] = useState<Dataset | null>(null);
+  const [visits, setVisits] = useState<VisitStats | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fresh, setFresh] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const reload = useCallback(async () => {
     try {
-      setData(await api.loadAll());
+      const [d, v] = await Promise.all([api.loadAll(), api.visitStats().catch(() => null)]);
+      setData(d);
+      setVisits(v);
       setError(null);
     } catch {
       setError('تعذّر تحميل البيانات.');
     }
   }, []);
   useEffect(() => void reload(), [reload]);
+  // Realtime push (admins only, enforced by RLS) + a slow polling fallback.
+  useEffect(() => {
+    const off = api.subscribe(() => {
+      setFresh(true);
+      reload();
+    });
+    const timer = setInterval(reload, 60_000);
+    return () => {
+      off();
+      clearInterval(timer);
+    };
+  }, [reload]);
 
   return (
     <>
@@ -127,6 +146,37 @@ function Dashboard() {
           </button>
         </p>
       )}
+      {data && (
+        <Notifications
+          data={data}
+          fresh={fresh}
+          onSeen={async (kind, ids) => {
+            await api.markSeen(kind, ids);
+            setFresh(false);
+            await reload();
+          }}
+        />
+      )}
+      <div className="toolbar" style={{ marginTop: 12 }}>
+        <button
+          className="btn"
+          disabled={!data || exporting}
+          onClick={async () => {
+            if (!data || !confirm(PII_NOTE)) return;
+            setExporting(true);
+            try {
+              await exportExcel(data, visits);
+            } catch {
+              setError('تعذّر إنشاء ملف Excel.');
+            } finally {
+              setExporting(false);
+            }
+          }}
+        >
+          <FileSpreadsheet size={18} aria-hidden /> {exporting ? 'جارٍ التصدير…' : 'تصدير Excel'}
+        </button>
+        <span className="muted small">ملف .xlsx: الملخص، المستقلون، البلاغات والمقترحات، حالة المعالجة.</span>
+      </div>
       <div className="tabs" role="tablist">
         {(
           [
@@ -147,7 +197,7 @@ function Dashboard() {
       {!data ? (
         <p>جارٍ التحميل…</p>
       ) : tab === 'stats' ? (
-        <StatsTab stats={computeStats(data)} />
+        <StatsTab stats={computeStats(data)} visits={visits} conversion={computeConversion(data, visits)} />
       ) : tab === 'targets' ? (
         <TargetsTab data={data} reload={reload} />
       ) : (
@@ -188,9 +238,27 @@ function Breakdown({ title, counts, labels }: { title: string; counts: Record<st
   );
 }
 
-function StatsTab({ stats: s }: { stats: Stats }) {
+function StatsTab({ stats: s, visits, conversion }: { stats: Stats; visits: VisitStats | null; conversion: Conversion | null }) {
   return (
     <>
+      <h2>الزيارات والتحويل</h2>
+      {visits ? (
+        <>
+          <div className="grid">
+            <Stat k="إجمالي الزيارات" v={visits.total} sub="زيارة لكل جلسة متصفح، بدون صفحة الإدارة" />
+            <Stat k="الزوار الفريدون (تقريبي)" v={visits.unique} sub="معرّف عشوائي في المتصفح، بلا IP" />
+            <Stat k="المشاركون منذ بدء القياس" v={conversion?.submitters ?? 0} sub={`${conversion?.entries ?? 0} مشاركة`} />
+            <Stat k="نسبة التحويل" v={conversion?.rate == null ? '—' : `${conversion.rate}%`} sub="المشاركون الفريدون ÷ الزوار الفريدون × 100" />
+          </div>
+          <p className="muted small">
+            النسبة تقريبية: الشخص نفسه قد يزور من أكثر من جهاز أو متصفح، وتُحسب فقط المشاركات المرسلة بعد أول زيارة مسجّلة
+            {visits.since ? ` (${fmt(visits.since)})` : ''}. تكرار الزيارة خلال 30 دقيقة من المتصفح نفسه لا يُحسب زيارة جديدة.
+          </p>
+        </>
+      ) : (
+        <p className="muted">إحصاءات الزيارات غير متاحة بعد (يلزم تنفيذ ملف supabase/002_visits_notifications.sql).</p>
+      )}
+
       <h2>المشاركة</h2>
       <div className="grid">
         <Stat k="إجمالي المستقلين المستهدفين" v={s.hasList ? s.totalTargets : null} />
@@ -628,6 +696,74 @@ function TicketDetails({ t }: { t: Ticket }) {
           )}
           {api.mode === 'cloud' && <p className="muted small">الروابط مؤقتة (10 دقائق).</p>}
         </>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Notifications ---------------- */
+
+type FeedItem = { kind: FeedKind; id: number; at: string; label: string; who: string; title: string };
+
+function Notifications({ data, fresh, onSeen }: { data: Dataset; fresh: boolean; onSeen: (kind: FeedKind, ids: number[]) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  // seen_at === undefined means migration 002 is not applied yet: no notifications then
+  const items: FeedItem[] = [
+    ...data.statuses
+      .filter((x) => x.seen_at === null)
+      .map((x) => ({ kind: 'status' as const, id: x.id, at: x.created_at, label: 'تحديث حالة حساب', who: x.full_name, title: `${HAS_ACCOUNT[x.has_account]} / ${PROFILE_STATUS[x.profile_status]}` })),
+    ...data.tickets
+      .filter((x) => x.seen_at === null)
+      .map((x) => ({ kind: 'ticket' as const, id: x.id, at: x.created_at, label: `${TICKET_KIND[x.kind]} ${ticketRef(x.id)}`, who: x.full_name, title: x.title })),
+  ].sort((a, b) => b.at.localeCompare(a.at));
+  const ids = (kind: FeedKind) => items.filter((i) => i.kind === kind).map((i) => i.id);
+
+  return (
+    <div className={'notif' + (items.length ? ' has-new' : '')}>
+      <button className="notif-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <Bell size={18} aria-hidden />
+        <span>المشاركات الجديدة غير المراجَعة</span>
+        <span className="count" aria-label={`${items.length} غير مراجَعة`}>
+          {items.length}
+        </span>
+        {fresh && items.length > 0 && <span className="pill new">وصل جديد</span>}
+      </button>
+      {open && (
+        <div className="notif-panel">
+          {items.length === 0 ? (
+            <p className="muted" style={{ margin: 0 }}>
+              لا توجد مشاركات جديدة.
+            </p>
+          ) : (
+            <>
+              <ul>
+                {items.slice(0, 30).map((i) => (
+                  <li key={i.kind + i.id}>
+                    <div>
+                      <strong>{i.label}</strong> — {i.who}
+                      <div className="muted small">
+                        {i.title} · {fmt(i.at)}
+                      </div>
+                    </div>
+                    <button className="btn outline sm" onClick={() => onSeen(i.kind, [i.id])}>
+                      تمت المراجعة
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {items.length > 30 && <p className="muted small">و{items.length - 30} أخرى…</p>}
+              <button
+                className="btn sm"
+                onClick={async () => {
+                  await onSeen('status', ids('status'));
+                  await onSeen('ticket', ids('ticket'));
+                }}
+              >
+                <CheckCheck size={16} aria-hidden /> تعليم الكل كمراجَع
+              </button>
+            </>
+          )}
+        </div>
       )}
     </div>
   );

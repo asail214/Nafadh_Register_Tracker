@@ -30,6 +30,23 @@ npm run build      # الناتج في dist/
    ```
    مفتاح anon عام بطبيعته ومحمي بسياسات RLS. **لا تضع `service_role` في أي متغير `VITE_` أو في الواجهة.**
 7. `npm run dev` ثم جرّب الإرسال وادخل `/admin`.
+8. **SQL Editor**: نفّذ `supabase/002_visits_notifications.sql` (إضافي فقط، لا يحذف أو يغيّر بيانات، آمن لإعادة التشغيل).
+   يضيف: جدول الزيارات `visits` + الدالتين `record_visit` و `visit_stats`، عمود `seen_at` للإشعارات، وتفعيل Realtime
+   للجدولين `status_updates` و `tickets`.
+
+### متغيرات Vercel مقابل التطبيق
+التطبيق يقرأ `VITE_SUPABASE_URL` و `VITE_SUPABASE_ANON_KEY` فقط (Vite لا يكشف إلا المتغيرات التي تبدأ بـ `VITE_`).
+تكامل Supabase في Vercel يضيف `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` وغيرها؛ انسخ قيمتي هذين
+المتغيرين إلى `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` ثم Redeploy. لا تنسخ `SUPABASE_SERVICE_ROLE_KEY` أو
+`SUPABASE_JWT_SECRET` أو `POSTGRES_*` إلى أي متغير `VITE_`.
+
+### الزيارات والإشعارات والتصدير
+- **الزيارات:** زيارة واحدة لكل جلسة متصفح على الصفحة العامة فقط (لا `/admin`)، بمعرّف عشوائي محفوظ في المتصفح، بلا IP.
+  الخادم يتجاهل المعرّف نفسه خلال 30 دقيقة ويضع سقفًا 600 زيارة/ساعة. نسبة التحويل = المشاركون الفريدون (بالبريد) منذ
+  أول زيارة مسجّلة ÷ الزوار الفريدون × 100 — تقريبية.
+- **الإشعارات:** عدّاد «غير مراجَعة» في لوحة الإدارة + Supabase Realtime (يصل فقط لمن تسمح له RLS بالقراءة = الإدارة)
+  مع تحديث احتياطي كل 60 ثانية. تصور Telegram في `docs/TELEGRAM_PLAN.md` (غير مُفعّل).
+- **Excel:** زر «تصدير Excel» ينشئ `.xlsx` بأربع أوراق RTL بخط Cairo. المكتبة (exceljs) تُحمَّل عند الضغط فقط.
 
 ### نموذج الأمان (ملخص)
 - كل الجداول عليها RLS؛ القراءة والتعديل للإدارة فقط عبر `is_admin()` (جدول `admins`) — التحقق في قاعدة البيانات لا في الواجهة.

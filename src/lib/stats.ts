@@ -1,4 +1,4 @@
-import type { Dataset, StatusUpdate, Target } from './types';
+import type { Dataset, StatusUpdate, Target, VisitStats } from './types';
 
 /** Newest first; ties on timestamp are broken by id (ids are increasing). */
 const newestFirst = (a: StatusUpdate, b: StatusUpdate) => b.created_at.localeCompare(a.created_at) || b.id - a.id;
@@ -112,6 +112,27 @@ export function targetRows({ targets, statuses, tickets }: Dataset): TargetRow[]
       suggestions: tk.filter((t) => t.kind === 'suggestion').length,
     };
   });
+}
+
+export interface Conversion {
+  /** distinct emails that submitted anything since visit tracking started */
+  submitters: number;
+  /** all entries (status updates + tickets) since visit tracking started */
+  entries: number;
+  /** submitters ÷ unique visitors × 100 (approximate; null without visits) */
+  rate: number | null;
+}
+
+/**
+ * Only submissions made after the first recorded visit are counted, so data collected before
+ * analytics existed does not inflate the rate.
+ */
+export function computeConversion({ statuses, tickets }: Dataset, visits: VisitStats | null): Conversion | null {
+  if (!visits) return null;
+  const since = visits.since ?? '9999';
+  const recent = [...statuses, ...tickets].filter((x) => x.created_at >= since);
+  const submitters = new Set(recent.map((x) => x.email)).size;
+  return { submitters, entries: recent.length, rate: pct(submitters, visits.unique) };
 }
 
 /** Respondents whose email is not in the target list (name taken from their latest submission). */

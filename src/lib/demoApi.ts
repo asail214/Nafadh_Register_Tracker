@@ -7,7 +7,9 @@ const KEY = 'nft-demo-v1';
 const RATE_LIMIT_PER_HOUR = 10;
 
 export function createDemoApi(storage: Pick<Storage, 'getItem' | 'setItem'> | null = safeStorage()): Api {
-  let mem: Dataset & { seq: number } = load();
+  let mem: Dataset & { seq: number; visits?: { visitor: string; at: string }[] } = load();
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((l) => l());
   const images = new Map<string, string>();
 
   function load() {
@@ -47,9 +49,11 @@ export function createDemoApi(storage: Pick<Storage, 'getItem' | 'setItem'> | nu
           missing_parts: s.profile_status === 'partial' ? s.missing_parts : [],
           notes: s.notes.trim() || null,
           created_at: now(),
+          seen_at: null,
         };
         mem.statuses.push(row);
         save();
+        notify();
         return 'S-' + row.id;
       }
       const id = nextId();
@@ -70,10 +74,12 @@ export function createDemoApi(storage: Pick<Storage, 'getItem' | 'setItem'> | nu
         status: 'new',
         created_at: now(),
         updated_at: now(),
+        seen_at: null,
         attachments,
       };
       mem.tickets.push(t);
       save();
+      notify();
       return ticketRef(id);
     },
     async getSessionEmail() {
@@ -85,6 +91,7 @@ export function createDemoApi(storage: Pick<Storage, 'getItem' | 'setItem'> | nu
       return true;
     },
     async loadAll() {
+      mem = load(); // pick up entries written by other tabs
       return structuredClone({ targets: mem.targets, statuses: mem.statuses, tickets: mem.tickets });
     },
     async addTargets(rows) {
@@ -129,6 +136,32 @@ export function createDemoApi(storage: Pick<Storage, 'getItem' | 'setItem'> | nu
     },
     async attachmentUrls(paths) {
       return paths.map((p) => images.get(p) ?? '');
+    },
+    async recordVisit(visitor) {
+      const visits = (mem.visits ??= []);
+      const cutoff = new Date(Date.now() - 30 * 60_000).toISOString();
+      if (visits.some((v) => v.visitor === visitor && v.at > cutoff)) return;
+      visits.push({ visitor, at: now() });
+      save();
+    },
+    async visitStats() {
+      const visits = mem.visits ?? [];
+      return { total: visits.length, unique: new Set(visits.map((v) => v.visitor)).size, since: visits[0]?.at ?? null };
+    },
+    async markSeen(kind, ids) {
+      const list: { id: number; seen_at?: string | null }[] = kind === 'status' ? mem.statuses : mem.tickets;
+      for (const x of list) if (ids.includes(x.id)) x.seen_at = now();
+      save();
+    },
+    subscribe(onChange) {
+      // other tabs (e.g. the public page) write to localStorage
+      const onStorage = (e: StorageEvent) => e.key === KEY && onChange();
+      listeners.add(onChange);
+      if (typeof window !== 'undefined') window.addEventListener('storage', onStorage);
+      return () => {
+        listeners.delete(onChange);
+        if (typeof window !== 'undefined') window.removeEventListener('storage', onStorage);
+      };
     },
   };
 }

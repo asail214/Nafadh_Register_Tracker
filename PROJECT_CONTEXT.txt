@@ -1,5 +1,37 @@
 PROJECT_CONTEXT — NAFADH Freelancers Tracker
-آخر تحديث: 2026-10-27 (الجلسة 2)
+آخر تحديث: 2026-10-27 (الجلسة 6)
+
+== الجلسة 6 ==
+- كل تعديلات الجلسات 3–5 دُفعت إلى origin/main بموافقة صريحة (انظر WORK_LOG للـ hash). Vercel ينشر تلقائيًا من main.
+- .env.local المحلي مملوء بالقيم العامة (مفتاح publishable) ⇒ npm run dev محليًا يعمل الآن على Supabase الحقيقي (ليس Demo).
+- المتبقي: تأكيد نجاح نشر Vercel، تنفيذ 002 في Supabase (إن لم يُنفذ)، إضافة VITE_* في Vercel، تفعيل admins،
+  اختبار سحابي ببيانات وهمية (إرسال/صور/دخول/إشعارات/زيارات).
+
+== الجلسة 5: Excel + الزيارات + الإشعارات ==
+- حسب المستخدمة: schema.sql نُفّذ في Supabase (5 جداول + bucket attachments)، مستخدم إدارة قيد التفعيل.
+- ملف SQL جديد يجب تنفيذه: supabase/002_visits_notifications.sql (إضافي، آمن لإعادة التشغيل):
+  visits + record_visit() + visit_stats() (إدارة فقط)، seen_at على status_updates و tickets (الإدارة تعدّل seen_at فقط)،
+  إضافة الجدولين إلى publication supabase_realtime، تثبيت search_path لـ touch_updated_at.
+- Excel: src/lib/excel.ts (exceljs، تحميل كسول عند الضغط، 4 أوراق RTL بخط Cairo، نص فقط لا صيغ، إزالة محارف XML غير صالحة).
+  overrides في package.json: exceljs → uuid ^11.1.1 (لإغلاق ثغرة moderate؛ npm audit = 0).
+- الزيارات: src/lib/visit.ts (جلسة واحدة، معرّف عشوائي localStorage، تخطي navigator.webdriver)، فقط في PublicPage.
+  computeConversion في stats.ts: المشاركون الفريدون منذ أول زيارة ÷ الزوار الفريدون.
+- الإشعارات: مكوّن Notifications في AdminPage (عداد غير المراجَع، تمت المراجعة، تعليم الكل) + api.subscribe
+  (Realtime في السحابي، حدث storage في Demo) + تحديث كل 60 ثانية. seen_at غير موجود قبل 002 ⇒ لا إشعارات.
+- Telegram: تصور فقط docs/TELEGRAM_PLAN.md + مسودة supabase/functions/notify-telegram/index.ts (غير منشورة، بلا Tokens).
+- .env.local أُنشئ محليًا بقيم فارغة (مستثنى من Git عبر *.local) ⇒ التطبيق محليًا ما زال Demo حتى تُملأ القيم العامة.
+
+== الحالة الحالية (الجلسة 4) ==
+- منشور على Vercel (بواسطة المستخدمة): https://nafadh-register-tracker.vercel.app/ — مرتبط بـ GitHub بنشر تلقائي من main
+  ⇒ أي Push = نشر. لا Push قبل مراجعة المستخدمة.
+- Supabase: مشروع nafadh-freelancers-tracker-db مربوط عبر Vercel Marketplace. لم يُشغَّل schema.sql بعد (حسب علمنا).
+- تعارض أسماء المتغيرات: الكود يقرأ VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY فقط (Vite يكشف VITE_* فقط).
+  تكامل Vercel يضيف عادة NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY / SUPABASE_URL / SUPABASE_ANON_KEY /
+  SUPABASE_SERVICE_ROLE_KEY / SUPABASE_JWT_SECRET / POSTGRES_* ⇒ الموقع المنشور يعمل حاليًا في وضع Demo.
+  الحل المقترح: إضافة VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY يدويًا في Vercel (نسخ قيم NEXT_PUBLIC_*) ثم Redeploy.
+  لا تُنسخ SERVICE_ROLE أو JWT_SECRET إلى أي متغير VITE_.
+- واجهة المستقل أُعيد تصميمها (الجلسة 4): نموذج 3 خطوات + مؤشر تقدم حقيقي (src/lib/formSteps.ts) + lucide-react.
+  الشعار الأصلي logo-blue.png أبيض شفاف ⇒ الرأس صار شريطًا أزرق #24529B (كان سبب «المساحة البيضاء» أعلى الصفحة).
 
 == الهدف ==
 موقع متابعة صغير بالعربية لمستقلي مسار «نفاذ للعمل الحر» (هيئة تنظيم الاتصالات - عُمان):
@@ -62,6 +94,10 @@ README.md (التشغيل، ربط Supabase خطوة بخطوة، الأمان،
 - المستودع: https://github.com/asail214/Nafadh_Register_Tracker (فرع main، الدفع الأول تم بنجاح دون force).
 - .gitignore يستبعد: node_modules, dist, .env*, *.local, *.pem, *.key, .vercel, .netlify, *.csv, exports/, .claude/
 - فحص الأسرار قبل الـ commit: لا مفاتيح أو أسرار.
+- سياسة Git (الجلسة 3): الدفع فقط لهذا المستودع/main بعد تحقق المسار والـ remote والفرع (التفاصيل في CLAUDE.md).
+- الاعتماد الحالي: Git Credential Manager لحساب asail214 على github.com = صلاحية الحساب كاملة (غير محصورة تقنيًا).
+  التوصية: Fine-grained PAT أو Deploy Key لهذا المستودع فقط + قواعد deny في إعدادات Claude Code (بانتظار موافقة المستخدمة).
+- تعديلات الجلسة 3 غير مدفوعة (commit/push ينتظر الموافقة).
 - Vercel: حساب المستخدمة جاهز؛ سيُستخدم لاحقًا بمشروع منفصل. لم يتم النشر (يحتاج موافقة صريحة، مع مراعاة قيد Hobby).
 
 == العوائق / يحتاج المستخدمة ==

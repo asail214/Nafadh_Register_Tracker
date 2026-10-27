@@ -13,6 +13,18 @@
 - إدخال بيانات شخصية حقيقية أو رفع صور حقيقية.
 - لا أسرار في الكود أو Git أو متغيرات VITE_*. لا SERVICE_ROLE في الواجهة. لا تخترع مفاتيح Supabase.
 
+## سياسة Git (صارمة)
+- المستودع الوحيد المسموح بالدفع إليه: https://github.com/asail214/Nafadh_Register_Tracker.git (الفرع main).
+- ممنوع: Push أو تعديل remote أو أي عملية Git في أي مستودع/مجلد آخر، خاصة مشاريع NAFADH الأخرى. لا Force Push.
+- ممنوع دون موافقة صريحة: تغيير بيانات GitHub، إعدادات Git العامة (global/system)، أو Windows Credential Manager.
+- قبل أي Push (وبعد موافقة المستخدمة على الدفع): تحقّق ووثّق في الرد
+  1) `pwd` = C:\Users\USER PC\Downloads\Nafadh Freelancers Tracker
+  2) `git remote get-url --push origin` = الرابط أعلاه حرفيًا
+  3) `git branch --show-current` = main، ولا توجد remotes أخرى (`git remote -v`).
+  أي اختلاف → توقف واسأل.
+- تنبيه: هذه تعليمات سلوكية وليست تقييدًا تقنيًا. اعتماد Git الحالي (Git Credential Manager لحساب asail214
+  على github.com) يصلح لكل مستودع يملك الحساب صلاحية الكتابة عليه، لا لهذا المستودع وحده.
+
 ## التقنية
 - React + TypeScript + Vite، CSS بسيط (src/styles.css)، RTL عربي، خط Cairo.
 - لون رسمي #24529B، خلفية بيضاء، تصميم بسيط جدًا بلا أقسام تسويقية.

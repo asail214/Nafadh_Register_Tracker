@@ -40,6 +40,9 @@ beforeAll(async () => {
   db = new PGlite();
   await db.exec(SUPABASE_STUBS);
   await db.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
+  await db.exec(readFileSync(new URL('./002_visits_notifications.sql', import.meta.url), 'utf8'));
+  // re-running the migration must be harmless
+  await db.exec(readFileSync(new URL('./002_visits_notifications.sql', import.meta.url), 'utf8'));
   await db.exec(`insert into auth.users values ('${ADMIN}','admin@x.test'),('${OTHER}','other@x.test');
                  insert into public.admins values ('${ADMIN}');
                  insert into public.targets (full_name, email) values ('شخص خيالي','fake.person@example.test');`);
@@ -110,6 +113,31 @@ describe('schema.sql', () => {
     await expect(submit({ ...base, attachments: [`${UPLOAD}/0.webp`] })).rejects.toThrow();
     expect((await as('authenticated', ADMIN, 'select * from storage.objects')).rows).toHaveLength(1);
     expect((await as('authenticated', OTHER, 'select * from storage.objects')).rows).toHaveLength(0);
+  });
+
+  it('visits: anon records via RPC only, reloads within 30 min are ignored, stats are admin-only', async () => {
+    const v1 = '44444444-4444-4444-8444-444444444444';
+    const v2 = '55555555-5555-4555-8555-555555555555';
+    await as('anon', null, 'select public.record_visit($1)', [v1]);
+    await as('anon', null, 'select public.record_visit($1)', [v1]); // reload
+    await as('anon', null, 'select public.record_visit($1)', [v2]);
+    await expect(as('anon', null, 'select * from public.visits')).rejects.toThrow(/permission denied/);
+    await expect(as('anon', null, `insert into public.visits (visitor_id) values ('${v1}')`)).rejects.toThrow();
+    await expect(as('anon', null, 'select * from public.visit_stats()')).rejects.toThrow();
+    await expect(as('authenticated', OTHER, 'select * from public.visit_stats()')).rejects.toThrow(/not_admin/);
+    const s = await as('authenticated', ADMIN, 'select total_visits::int t, unique_visitors::int u from public.visit_stats()');
+    expect(s.rows[0]).toEqual({ t: 2, u: 2 });
+  });
+
+  it('notifications: only admins can mark entries as seen; content stays read-only', async () => {
+    await as('authenticated', OTHER, 'update public.status_updates set seen_at = now()');
+    expect((await db.query<{ n: number }>('select count(*)::int n from public.status_updates where seen_at is not null')).rows[0].n).toBe(0);
+    await as('authenticated', ADMIN, 'update public.status_updates set seen_at = now()');
+    await as('authenticated', ADMIN, 'update public.tickets set seen_at = now()');
+    expect((await db.query<{ n: number }>('select count(*)::int n from public.status_updates where seen_at is null')).rows[0].n).toBe(0);
+    await expect(as('authenticated', ADMIN, `update public.status_updates set has_account = 'no'`)).rejects.toThrow(/permission denied/);
+    await expect(as('authenticated', ADMIN, `update public.tickets set description = 'changed!!'`)).rejects.toThrow(/permission denied/);
+    await expect(as('anon', null, 'update public.tickets set seen_at = now()')).rejects.toThrow();
   });
 
   it('rate-limits more than 10 entries per email per hour', async () => {
