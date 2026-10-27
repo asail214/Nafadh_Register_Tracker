@@ -1,0 +1,15 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+.vercel
+.netlify
+
+# personal data / exports must never be committed
+*.csv
+exports/
+.claude/

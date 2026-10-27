@@ -1,0 +1,10 @@
+WORK_LOG — سجل زمني مختصر
+2026-10-27 الجلسة 1
+- قراءة CLAUDE_START_PROMPT.txt. الشعارات: logo-blue.png (نفاذ، 3848x1445)، logo-blue0.png (نفاذ صغير 115x40)، logo_colored.png (الهيئة - غير مستخدم في الرأس).
+- إنشاء ملفات الذاكرة CLAUDE.md / PROJECT_CONTEXT.txt / WORK_LOG.txt.
+- المرحلة 1: إنشاء هيكل Vite (React 19, TS 7, Vite 8, vitest 5)، التصميم، ملفات الإعداد. نسخ logo-blue.png → public/nafadh-logo.png.
+- المرحلة 2: PublicPage + demoApi + stats/csv/validation/image. build ناجح، 10 اختبارات ناجحة. إصلاح tie-break للحالة الأحدث.
+- المرحلة 3: supabase/schema.sql + AdminPage كاملة. إضافة @electric-sql/pglite (dev) لاختبار SQL محليًا: 7 اختبارات ناجحة.
+- المرحلة 4: README (Supabase + الأمان + النشر وقيد Vercel Hobby). build ناجح، npm test 17/17، preview: / و /admin 200.
+- الحالة: وضع Demo فقط (لا مفاتيح Supabase). لم يتم أي نشر أو ربط Git remote.
+- الخطوة التالية: المستخدمة تنشئ مشروع Supabase Free وتضع المفاتيح في .env.local → اختبار سحابي فعلي.

@@ -1,0 +1,124 @@
+import type { Dataset, StatusUpdate, Target } from './types';
+
+/** Newest first; ties on timestamp are broken by id (ids are increasing). */
+const newestFirst = (a: StatusUpdate, b: StatusUpdate) => b.created_at.localeCompare(a.created_at) || b.id - a.id;
+
+export function latestStatusByEmail(statuses: StatusUpdate[]): Map<string, StatusUpdate> {
+  const m = new Map<string, StatusUpdate>();
+  for (const s of statuses) {
+    const cur = m.get(s.email);
+    if (!cur || newestFirst(s, cur) < 0) m.set(s.email, s);
+  }
+  return m;
+}
+
+const pct = (n: number, total: number) => (total > 0 ? Math.round((n / total) * 1000) / 10 : null);
+
+function countBy<T>(items: T[], key: (t: T) => string) {
+  const r: Record<string, number> = {};
+  for (const i of items) r[key(i)] = (r[key(i)] ?? 0) + 1;
+  return r;
+}
+
+export interface Stats {
+  totalTargets: number;
+  hasList: boolean;
+  respondents: number;
+  respondentsInList: number;
+  respondentsOutsideList: number;
+  nonRespondents: number | null;
+  participationRate: number | null;
+  registeredReported: number;
+  registeredVerified: number;
+  profileCompleteReported: number;
+  profileCompleteVerified: number;
+  registeredReportedRate: number | null;
+  registeredVerifiedRate: number | null;
+  profileReportedRate: number | null;
+  profileVerifiedRate: number | null;
+  hasAccount: Record<string, number>;
+  profileStatus: Record<string, number>;
+  issues: number;
+  issuesByStatus: Record<string, number>;
+  issuesByCategory: Record<string, number>;
+  issuesBlocking: number;
+  suggestions: number;
+  suggestionsByStatus: Record<string, number>;
+}
+
+/**
+ * Rates are always relative to the target list and are null until a list exists.
+ * "No response" is never counted as "not registered"; self-reports are kept separate from admin-verified values.
+ */
+export function computeStats({ targets, statuses, tickets }: Dataset): Stats {
+  const listEmails = new Set(targets.map((t) => t.email));
+  const respondentEmails = new Set([...statuses.map((s) => s.email), ...tickets.map((t) => t.email)]);
+  const inList = [...respondentEmails].filter((e) => listEmails.has(e)).length;
+  const total = targets.length;
+  const latest = [...latestStatusByEmail(statuses).values()];
+  const latestInList = latest.filter((s) => listEmails.has(s.email));
+  const registeredVerified = targets.filter((t) => t.registered_verified === true).length;
+  const profileCompleteVerified = targets.filter((t) => t.profile_verified === true).length;
+  const issues = tickets.filter((t) => t.kind === 'issue');
+  const suggestions = tickets.filter((t) => t.kind === 'suggestion');
+
+  return {
+    totalTargets: total,
+    hasList: total > 0,
+    respondents: respondentEmails.size,
+    respondentsInList: inList,
+    respondentsOutsideList: respondentEmails.size - inList,
+    nonRespondents: total > 0 ? total - inList : null,
+    participationRate: pct(inList, total),
+    registeredReported: latest.filter((s) => s.has_account === 'yes').length,
+    registeredVerified,
+    profileCompleteReported: latest.filter((s) => s.profile_status === 'complete').length,
+    profileCompleteVerified,
+    registeredReportedRate: pct(latestInList.filter((s) => s.has_account === 'yes').length, total),
+    registeredVerifiedRate: pct(registeredVerified, total),
+    profileReportedRate: pct(latestInList.filter((s) => s.profile_status === 'complete').length, total),
+    profileVerifiedRate: pct(profileCompleteVerified, total),
+    hasAccount: countBy(latest, (s) => s.has_account),
+    profileStatus: countBy(latest, (s) => s.profile_status),
+    issues: issues.length,
+    issuesByStatus: countBy(issues, (t) => t.status),
+    issuesByCategory: countBy(issues, (t) => t.category ?? 'other'),
+    issuesBlocking: issues.filter((t) => t.blocking).length,
+    suggestions: suggestions.length,
+    suggestionsByStatus: countBy(suggestions, (t) => t.status),
+  };
+}
+
+export interface TargetRow {
+  target: Target;
+  latest: StatusUpdate | null;
+  history: StatusUpdate[];
+  lastActivity: string | null;
+  issues: number;
+  suggestions: number;
+}
+
+export function targetRows({ targets, statuses, tickets }: Dataset): TargetRow[] {
+  return targets.map((target) => {
+    const st = statuses.filter((s) => s.email === target.email).sort(newestFirst);
+    const tk = tickets.filter((t) => t.email === target.email);
+    const times = [...st.map((s) => s.created_at), ...tk.map((t) => t.created_at)].sort();
+    return {
+      target,
+      latest: st[0] ?? null,
+      history: st,
+      lastActivity: times.at(-1) ?? null,
+      issues: tk.filter((t) => t.kind === 'issue').length,
+      suggestions: tk.filter((t) => t.kind === 'suggestion').length,
+    };
+  });
+}
+
+/** Respondents whose email is not in the target list (name taken from their latest submission). */
+export function outsideRespondents({ targets, statuses, tickets }: Dataset) {
+  const list = new Set(targets.map((t) => t.email));
+  const m = new Map<string, string>();
+  for (const x of [...statuses, ...tickets].sort((a, b) => a.created_at.localeCompare(b.created_at)))
+    if (!list.has(x.email)) m.set(x.email, x.full_name);
+  return [...m].map(([email, full_name]) => ({ email, full_name }));
+}
