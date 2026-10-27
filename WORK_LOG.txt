@@ -8,3 +8,9 @@ WORK_LOG — سجل زمني مختصر
 - المرحلة 4: README (Supabase + الأمان + النشر وقيد Vercel Hobby). build ناجح، npm test 17/17، preview: / و /admin 200.
 - الحالة: وضع Demo فقط (لا مفاتيح Supabase). لم يتم أي نشر أو ربط Git remote.
 - الخطوة التالية: المستخدمة تنشئ مشروع Supabase Free وتضع المفاتيح في .env.local → اختبار سحابي فعلي.
+2026-10-27 الجلسة 2
+- مراجعة: شرط رسالة الإضافة اليدوية صحيح (غير معكوس)؛ إضافة معالجة خطأ + اختبار لقيمة addTargets. build ناجح، test 17/17.
+- .gitignore: إضافة *.csv و exports/ و .claude/ لمنع رفع بيانات شخصية.
+- git init (main) + commit أولي + push إلى https://github.com/asail214/Nafadh_Register_Tracker (دون force).
+- تشغيل محلي: http://localhost:5173/ و /admin (200). لا نشر على Vercel.
+- الخطوة التالية: مراجعة المستخدمة للتصميم ← ملاحظاتها ← ثم Supabase Free ← ثم قرار النشر.
